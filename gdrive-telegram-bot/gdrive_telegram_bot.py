@@ -1,5 +1,6 @@
 from __future__ import print_function
-from telegram.ext import Updater, CommandHandler
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+import telegram 
 import subprocess
 
 import httplib2
@@ -68,6 +69,13 @@ def ifconfig(bot, update):
 	update.message.reply_text(
 		result)
 
+def on_chat_message(bot, update):
+    chat_id = update.message.chat_id
+    user = update.message.from_user
+    user_name = "%s%s" % (user.last_name, user.first_name)
+    bot.sendMessage(chat_id, text=("%s say " + update.message.text) % user_name)
+    return
+
 def gdrive(bot, update):
     """Shows basic usage of the Google Drive API.
 
@@ -88,28 +96,18 @@ def gdrive(bot, update):
         msg = "Files: \n"
         for item in items:
         	msg += '{0}'.format(item['name']) + " \n"
-            #msg += '{0} ({1})'.format(item['name'], item['id']) + " \n"
-            #update.message.reply_text('{0} ({1})'.format(item['name'], item['id']))
 
         update.message.reply_text(msg)
 
-            #request = service.files().get_media(fileId=item['id'])
-            #fh = io.FileIO(item['name'], mode='wb')
-            #downloader = MediaIoBaseDownload(fh, request)
-            #done = False
-            
-
-		#while done is False:
-        #    status, done = downloader.next_chunk()
-        #    update.message.reply_text("Download %d%%." % int(status.progress() * 100))
-
 if __name__ == '__main__':
     updater = Updater('420091787:AAFuiSJXkYK1pk1yhU3WRjoEOmw7vR8dh0Q')
-    updater.dispatcher.add_handler(CommandHandler('start', start))
-    updater.dispatcher.add_handler(CommandHandler('hello', hello))
-    updater.dispatcher.add_handler(CommandHandler('ls', ls))
-    updater.dispatcher.add_handler(CommandHandler('ifconfig', ifconfig))
-    updater.dispatcher.add_handler(CommandHandler('gdrive', gdrive))
+    dispatcher = updater.dispatcher
+    dispatcher.add_handler(CommandHandler('start', start))
+    dispatcher.add_handler(CommandHandler('hello', hello))
+    dispatcher.add_handler(CommandHandler('ls', ls))
+    dispatcher.add_handler(CommandHandler('ifconfig', ifconfig))
+    dispatcher.add_handler(CommandHandler('gdrive', gdrive))
+    dispatcher.add_handler(MessageHandler([Filters.text], on_chat_message))
 
     updater.start_polling()
     updater.idle()
