@@ -1,7 +1,7 @@
 from __future__ import print_function
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 import telegram 
-from subprocess import PIPE, STDOUT, Popen
+from subprocess import PIPE, STDOUT, Popen, check_output
 import shlex
 
 import httplib2
@@ -24,6 +24,7 @@ except ImportError:
 SCOPES = 'https://www.googleapis.com/auth/drive'
 CLIENT_SECRET_FILE = 'client_secret.json'
 APPLICATION_NAME = 'Drive API Python Quickstart'
+proc = None
 
 def get_credentials():
     """Gets valid user credentials from storage.
@@ -60,30 +61,22 @@ def hello(bot, update):
     update.message.reply_text(
         'Hello {}'.format(update.message.from_user.first_name))
 
-def ls(bot, update):
-	result = subprocess.check_output ('ls -al' , shell=True)
-	update.message.reply_text(result)
-
-def apt(bot, update):
-    cmd = 'apt upgrade'
-    my_env = os.environ
-    args = shlex.split(cmd)
-    #print(my_env['PATH'])
-    proc = Popen(args, env=my_env, stdin=PIPE, stdout=PIPE, stderr=PIPE, shell=True)
-    (output, error) = proc.communicate()
-    bot.sendMessage(update.message.chat_id, output)
-    update.message.reply_text(output)
-
-def ifconfig(bot, update):
-	result = subprocess.check_output ('ifconfig' , shell=True)
-	update.message.reply_text(result)
+def commander(bot, update, args):
+    bot.sendMessage(chat_id=update.message.chat_id, text="Call commander")
+    cmd_text = ' '.join(args)
+    print(cmd_text)
+    result = check_output(cmd_text, shell=True)
+    bot.sendMessage(chat_id=update.message.chat_id, text=result)
 
 def on_chat_message(bot, update):
     chat_id = update.message.chat_id
     user = update.message.from_user
+    bot.sendMessage(chat_id, " "  + proc.returncode)
+    if(proc.returncode is not None):
+    	proc.stdin(update.message.text+"\n")
     user_name = "%s%s" % (user.last_name, user.first_name)
     bot.sendMessage(chat_id, text=("%s say " + update.message.text) % user_name)
-    return
+    return 
 
 def gdrive(bot, update):
     """Shows basic usage of the Google Drive API.
@@ -113,10 +106,8 @@ if __name__ == '__main__':
     dispatcher = updater.dispatcher
     dispatcher.add_handler(CommandHandler('start', start))
     dispatcher.add_handler(CommandHandler('hello', hello))
-    dispatcher.add_handler(CommandHandler('ls', ls))
-    dispatcher.add_handler(CommandHandler('ifconfig', ifconfig))
     dispatcher.add_handler(CommandHandler('gdrive', gdrive))
-    dispatcher.add_handler(CommandHandler('apt', apt))
+    dispatcher.add_handler(CommandHandler('cmd', commander, pass_args=True))
     dispatcher.add_handler(MessageHandler([Filters.text], on_chat_message))
 
     updater.start_polling()
