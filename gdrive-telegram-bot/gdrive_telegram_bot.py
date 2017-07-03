@@ -1,7 +1,8 @@
 from __future__ import print_function
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 import telegram 
-import subprocess
+from subprocess import PIPE, STDOUT, Popen
+import shlex
 
 import httplib2
 import os
@@ -61,13 +62,21 @@ def hello(bot, update):
 
 def ls(bot, update):
 	result = subprocess.check_output ('ls -al' , shell=True)
-	update.message.reply_text(
-		result)
+	update.message.reply_text(result)
+
+def apt(bot, update):
+    cmd = 'apt upgrade'
+    my_env = os.environ
+    args = shlex.split(cmd)
+    #print(my_env['PATH'])
+    proc = Popen(args, env=my_env, stdin=PIPE, stdout=PIPE, stderr=PIPE, shell=True)
+    (output, error) = proc.communicate()
+    bot.sendMessage(update.message.chat_id, output)
+    update.message.reply_text(output)
 
 def ifconfig(bot, update):
 	result = subprocess.check_output ('ifconfig' , shell=True)
-	update.message.reply_text(
-		result)
+	update.message.reply_text(result)
 
 def on_chat_message(bot, update):
     chat_id = update.message.chat_id
@@ -107,6 +116,7 @@ if __name__ == '__main__':
     dispatcher.add_handler(CommandHandler('ls', ls))
     dispatcher.add_handler(CommandHandler('ifconfig', ifconfig))
     dispatcher.add_handler(CommandHandler('gdrive', gdrive))
+    dispatcher.add_handler(CommandHandler('apt', apt))
     dispatcher.add_handler(MessageHandler([Filters.text], on_chat_message))
 
     updater.start_polling()
