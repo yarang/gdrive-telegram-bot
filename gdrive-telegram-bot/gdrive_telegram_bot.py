@@ -100,37 +100,54 @@ def on_chat_message(bot, update):
         update.message.reply_text("Can't identify user.")
     return 
 
-def gdrive(bot, update):
+def gdrive(bot, update, args):
     """Shows basic usage of the Google Drive API.
 
     Creates a Google Drive API service object and outputs the names and IDs
     for up to 10 files.
     """
     global valid
+    page_token = None
+
     if(valid):
         credentials = get_credentials()
         http = credentials.authorize(httplib2.Http())
         service = discovery.build('drive', 'v3', http=http)
 
-        results = service.files().list(
-            pageSize=10,fields="nextPageToken, files(id, name)").execute()
-        items = results.get('files', [])
-        if not items:
-            print('No files found.')
+        if(args[0] == "search"):
+            while True:
+                query = ' '.join(map(str,args[1:]))
+                response = service.files().list(q=query, 
+                                                spaces='drive', 
+                                                fields='nextPageToken, files(id, name)', 
+                                                pageToken=page_token).execute()
+                for file in response.get('files', []):
+                    # Process change
+                    update.message.reply_text('Found file: %s' % (file.get('name')))
+                page_token = response.get('nextPageToken', None)
+                if page_token is None:
+                    break;
         else:
-            #update.message.reply_text('Files:')
-            msg = "Files: \n"
-            for item in items:
-                msg += '{0}'.format(item['name']) + " \n"
-
-            update.message.reply_text(msg)
+            results = service.files().list(
+                pageSize=10,fields="nextPageToken, files(id, name)").execute()
+            items = results.get('files', [])
+            if not items:
+                print('No files found.')
+            else:
+                #update.message.reply_text('Files:')
+                msg = "Files: \n"
+                for item in items:
+                    msg += '{0}'.format(item['name']) + " \n"
+                update.message.reply_text(msg)
+    else:
+        update.message.reply_text("Can't identify user.")
 
 if __name__ == '__main__':
     updater = Updater('420091787:AAFuiSJXkYK1pk1yhU3WRjoEOmw7vR8dh0Q')
     dispatcher = updater.dispatcher
     dispatcher.add_handler(CommandHandler('start', start))
     dispatcher.add_handler(CommandHandler('hello', hello))
-    dispatcher.add_handler(CommandHandler('gdrive', gdrive))
+    dispatcher.add_handler(CommandHandler('gdrive', gdrive, pass_args=True))
     dispatcher.add_handler(CommandHandler('cmd', commander, pass_args=True))
     dispatcher.add_handler(MessageHandler([Filters.text], on_chat_message))
 
