@@ -27,6 +27,7 @@ SCOPES = 'https://www.googleapis.com/auth/drive'
 CLIENT_SECRET_FILE = 'client_secret.json'
 APPLICATION_NAME = 'Drive API Python Quickstart'
 proc = None
+valid = False
 
 with open('users.json') as user_file:
 	jsondata = json.load(user_file)
@@ -60,32 +61,43 @@ def get_credentials():
     return credentials
 
 def start(bot, update):
-	for user in jsondata["users"]:
-		id = user["id"]
-		if(id == update.message.from_user.id):
-			update.message.reply_text('Hello World!')
-		else:
-			update.message.reply_text('Sorry!')
+    global valid
+    for user in jsondata["users"]:
+        if(user["id"] == update.message.from_user.id):
+            if(user["permission"] == "valid"):
+                valid = True
+    if(valid):
+        update.message.reply_text('Hello World!')
+    else:
+        update.message.reply_text('Sorry!')
 
 def hello(bot, update):
     update.message.reply_text(
         'Hello {}'.format(update.message.from_user.first_name))
 
 def commander(bot, update, args):
-    bot.sendMessage(chat_id=update.message.chat_id, text="Call commander")
-    cmd_text = ' '.join(args)
-    print(cmd_text)
-    result = check_output(cmd_text, shell=True)
-    bot.sendMessage(chat_id=update.message.chat_id, text=result)
+    global valid
+    if(valid):
+        bot.sendMessage(chat_id=update.message.chat_id, text="Call commander")
+        cmd_text = ' '.join(args)
+        print(cmd_text)
+        result = check_output(cmd_text, shell=True)
+        bot.sendMessage(chat_id=update.message.chat_id, text=result)
+    else:
+        update.message.reply_text("Can't identify user.")
 
 def on_chat_message(bot, update):
-    chat_id = update.message.chat_id
-    user = update.message.from_user
-    bot.sendMessage(chat_id, " "  + proc.returncode)
-    if(proc.returncode is not None):
-    	proc.stdin(update.message.text+"\n")
-    user_name = "%s%s" % (user.last_name, user.first_name)
-    bot.sendMessage(chat_id, text=("%s say " + update.message.text) % user_name)
+    global valid
+    if(valid):
+        chat_id = update.message.chat_id
+        user = update.message.from_user
+        bot.sendMessage(chat_id, " "  + proc.returncode)
+        if(proc.returncode is not None):
+            proc.stdin(update.message.text+"\n")
+        user_name = "%s%s" % (user.last_name, user.first_name)
+        bot.sendMessage(chat_id, text=("%s say " + update.message.text) % user_name)
+    else:
+        update.message.reply_text("Can't identify user.")
     return 
 
 def gdrive(bot, update):
@@ -94,22 +106,24 @@ def gdrive(bot, update):
     Creates a Google Drive API service object and outputs the names and IDs
     for up to 10 files.
     """
-    credentials = get_credentials()
-    http = credentials.authorize(httplib2.Http())
-    service = discovery.build('drive', 'v3', http=http)
+    global valid
+    if(valid):
+        credentials = get_credentials()
+        http = credentials.authorize(httplib2.Http())
+        service = discovery.build('drive', 'v3', http=http)
 
-    results = service.files().list(
-        pageSize=10,fields="nextPageToken, files(id, name)").execute()
-    items = results.get('files', [])
-    if not items:
-        print('No files found.')
-    else:
-        #update.message.reply_text('Files:')
-        msg = "Files: \n"
-        for item in items:
-        	msg += '{0}'.format(item['name']) + " \n"
+        results = service.files().list(
+            pageSize=10,fields="nextPageToken, files(id, name)").execute()
+        items = results.get('files', [])
+        if not items:
+            print('No files found.')
+        else:
+            #update.message.reply_text('Files:')
+            msg = "Files: \n"
+            for item in items:
+                msg += '{0}'.format(item['name']) + " \n"
 
-        update.message.reply_text(msg)
+            update.message.reply_text(msg)
 
 if __name__ == '__main__':
     updater = Updater('420091787:AAFuiSJXkYK1pk1yhU3WRjoEOmw7vR8dh0Q')
