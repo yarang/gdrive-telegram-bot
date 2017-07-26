@@ -35,8 +35,8 @@ filelist = {}
 service = None
 FILESTORAGE = "files/"
 
-with open('users.json') as user_file:
-	jsondata = json.load(user_file)
+with open('users.json', 'rw') as user_file:
+    jsondata = json.load(user_file)
 
 #google_keyboard = [['USE','ADD']]
 #markup = ReplyKeyboardMarkup(google_keyboard, one_time_keyboard=True)
@@ -47,11 +47,8 @@ def get_credential_info(service_name, user_name, user_id):
     credential_dir = os.path.join(home_dir, '.credentials')
     if not os.path.exists(credential_dir):
         os.makedirs(credential_dir)
-    print("enter function")
     file_name = str(service_name)+"-"+str(user_name)+"-"+str(user_id)+".json"
-    print(file_name)
     credential_path = os.path.join(credential_dir, file_name)
-    print(credential_path)
     
     store = Storage(credential_path)
     credentials = store.get()
@@ -163,6 +160,7 @@ def gdrive(bot, update, args):
 
         if(args[0] == "search"):
             count = 0
+            filelist = {}
             while True:
                 query = ' '.join(map(str,args[1:]))
                 response = service.files().list(q=query, 
@@ -183,11 +181,16 @@ def gdrive(bot, update, args):
                     break;
 
         elif(args[0] == "get"):
+            print("check get")
             number = int(args[1])
             name = filelist[number].keys()[0]
+            print("name : "+ name)
             id = filelist[number][name]
-            filename = FILESTORAGE + str(name)
-
+            print("id : "+ id)
+            print(type(name))
+            filename = FILESTORAGE + name
+            print(filename)
+            print("id :" + id + ", filename : " + filename)
             request = service.files().get_media(fileId=id)
             fh = io.FileIO(filename,"wb")
             downloader = MediaIoBaseDownload(fh, request)
@@ -211,6 +214,22 @@ def gdrive(bot, update, args):
                 update.message.reply_text(msg)
     else:
         update.message.reply_text("Can't identify user.")
+
+def restart(bot, update):
+    bot.send_message(update.message.chat_id, "Bot is restarting...")
+    count = 0
+    for user in jsondata["users"]:
+        if(user["id"] == update.message.from_user.id):
+            jsondata["users"][count] = chat_info
+        count = count + 1
+
+    print("json: " + str(jsondata))
+    #with open('users.json','w') as user_file:
+    user_file.write(json.dumps(jsondata))
+    user_file.close()
+
+    time.sleep(0.2)
+    os.execl(sys.executable, sys.executable, *sys.argv)
 
 if __name__ == '__main__':
     updater = Updater('420091787:AAFuiSJXkYK1pk1yhU3WRjoEOmw7vR8dh0Q')
@@ -242,6 +261,7 @@ if __name__ == '__main__':
     dispatcher.add_handler(CommandHandler('gdrive', gdrive, pass_args=True))
     dispatcher.add_handler(CommandHandler('cmd', commander, pass_args=True))
     dispatcher.add_handler(MessageHandler([Filters.text], on_chat_message))
+    dispatcher.add_handler(CommandHandler('r', restart))
 
     updater.start_polling()
     updater.idle()
