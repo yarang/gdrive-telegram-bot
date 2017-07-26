@@ -31,6 +31,9 @@ proc = None
 valid = False
 credentials = None
 chat_info = None
+filelist = {}
+service = None
+FILESTORAGE = "files/"
 
 with open('users.json') as user_file:
 	jsondata = json.load(user_file)
@@ -50,34 +53,6 @@ def get_credential_info(service_name, user_name, user_id):
     credential_path = os.path.join(credential_dir, file_name)
     print(credential_path)
     
-    store = Storage(credential_path)
-    credentials = store.get()
-    if not credentials or credentials.invalid:
-        flow = client.flow_from_clientsecrets(CLIENT_SECRET_FILE, SCOPES)
-        flow.user_agent = APPLICATION_NAME
-        if flags:
-            credentials = tools.run_flow(flow, store, flags)
-        else: # Needed only for compatibility with Python 2.6
-            credentials = tools.run(flow, store)
-        print('Storing credentials to ' + credential_path)
-    return credentials
-
-def get_credentials():
-    """Gets valid user credentials from storage.
-
-    If nothing has been stored, or if the stored credentials are invalid,
-    the OAuth2 flow is completed to obtain the new credentials.
-
-    Returns:
-        Credentials, the obtained credential.
-    """
-    home_dir = os.path.expanduser('~')
-    credential_dir = os.path.join(home_dir, '.credentials')
-    if not os.path.exists(credential_dir):
-        os.makedirs(credential_dir)
-    credential_path = os.path.join(credential_dir,
-                                   'drive-python-quickstart.json')
-
     store = Storage(credential_path)
     credentials = store.get()
     if not credentials or credentials.invalid:
@@ -134,7 +109,7 @@ def on_chat_message(bot, update):
 
 def google(bot, update):
     global credentials, chat_info
-    print("start conv")
+
     if("google" in chat_info):
         update.message.reply_text("check your account : " + chat_info["google"])
         return CHOOSING
@@ -172,8 +147,9 @@ def gdrive(bot, update, args):
     Creates a Google Drive API service object and outputs the names and IDs
     for up to 10 files.
     """
-    global valid, chat_info
+    global valid, chat_info, filelist, service
     page_token = None
+
     if("google" not in chat_info):
         bot.sendMessage(update.message.chat_id, text=(
             "What is your google account?"
@@ -181,12 +157,12 @@ def gdrive(bot, update, args):
         return
 
     if(valid):
-        print(update.message.from_user)
         credentials = get_credential_info("gdrive", chat_info["google"], update.message.from_user.id)
         http = credentials.authorize(httplib2.Http())
         service = discovery.build('drive', 'v3', http=http)
 
         if(args[0] == "search"):
+            count = 0
             while True:
                 query = ' '.join(map(str,args[1:]))
                 response = service.files().list(q=query, 
@@ -195,10 +171,32 @@ def gdrive(bot, update, args):
                                                 pageToken=page_token).execute()
                 for file in response.get('files', []):
                     # Process change
-                    update.message.reply_text('Found file: %s' % (file.get('name')))
+                    file_info = {}
+                    name = file.get('name')
+                    id = file.get('id')
+                    file_info[name] = id
+                    filelist[count] = file_info
+                    update.message.reply_text("Found file: [" + str(count) + "], " + name)
+                    count += 1
                 page_token = response.get('nextPageToken', None)
                 if page_token is None:
                     break;
+
+        elif(args[0] == "get"):
+            number = int(args[1])
+            name = filelist[number].keys()[0]
+            id = filelist[number][name]
+            filename = FILESTORAGE + str(name)
+
+            request = service.files().get_media(fileId=id)
+            fh = io.FileIO(filename,"wb")
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while done is False:
+                status, done = downloader.next_chunk()
+
+            bot.send_document(chat_id=update.message.chat_id, document=open(filename, 'rb'))
+
         else:
             results = service.files().list(
                 pageSize=10,fields="nextPageToken, files(id, name)").execute()
@@ -226,7 +224,7 @@ if __name__ == '__main__':
                        RegexHandler('^(ADD)$',
                                     add_account),
                        ],
-             ACCOUNTING: [MessageHandler(Filters.text,
+            ACCOUNTING: [MessageHandler(Filters.text,
                                            input_account,
                                            pass_user_data=True),
                             ],
