@@ -5,6 +5,7 @@ import telegram
 from subprocess import PIPE, STDOUT, Popen, check_output
 import shlex
 import json
+from functools import wraps
 
 import httplib2
 import os
@@ -62,6 +63,15 @@ def get_credential_info(service_name, user_name, user_id):
         print('Storing credentials to ' + credential_path)
     return credentials
 
+def restricted(func):
+    @wraps(func)
+    def wrapped(bot, update, *args, **kwargs):
+        if not valid:
+            print("Unauthorized access denied for {}.".format(user_id))
+            return
+        return func(bot, update, *args, **kwargs)
+    return wrapped
+
 def start(bot, update):
     global valid
     global chat_info
@@ -93,16 +103,12 @@ def commander(bot, update, args):
         update.message.reply_text("Can't identify user.")
     return
 
+@restricted
 def on_chat_message(bot, update):
-    global valid
-    if(valid):
-        chat_id = update.message.chat_id
-        user = update.message.from_user
-        user_name = "%s%s" % (user.last_name, user.first_name)
-        bot.sendMessage(chat_id, text=("%s say " + update.message.text) % user_name)
-    else:
-        update.message.reply_text("Can't identify user.")
-    return
+    chat_id = update.message.chat_id
+    user = update.message.from_user
+    user_name = "%s%s" % (user.last_name, user.first_name)
+    bot.sendMessage(chat_id, text=("%s say " + update.message.text) % user_name)
 
 def google(bot, update):
     global credentials, chat_info
@@ -138,6 +144,7 @@ def done(bot, update, user_data):
                               "Until next time!" % chat_info["google"])
     return ConversationHandler.END
 
+@restricted
 def gdrive(bot, update, args):
     """Shows basic usage of the Google Drive API.
 
@@ -153,67 +160,64 @@ def gdrive(bot, update, args):
             "Start /google command."))
         return
 
-    if(valid):
-        credentials = get_credential_info("gdrive", chat_info["google"], update.message.from_user.id)
-        http = credentials.authorize(httplib2.Http())
-        service = discovery.build('drive', 'v3', http=http)
+    credentials = get_credential_info("gdrive", chat_info["google"], update.message.from_user.id)
+    http = credentials.authorize(httplib2.Http())
+    service = discovery.build('drive', 'v3', http=http)
+    
+    if(args[0] == "search"):
+        count = 0
+        filelist = {}
+        msg = u"Searched Files\n"
+        while True:
+            query = ' '.join(map(str,args[1:]))
+            response = service.files().list(q=query, 
+                                            spaces='drive', 
+                                            fields='nextPageToken, files(id, name)', 
+                                            pageToken=page_token).execute()
+            print(response)
+            for file in response.get('files', []):
+                # Process change
+                file_info = {}
+                name = file.get('name')
+                id = file.get('id')
+                file_info[name] = id
+                filelist[count] = file_info
+                msg += u"Found [{0}] : {1}".format(count, name) + " \n"
+                count += 1
+                print(msg)
+            page_token = response.get('nextPageToken', None)
+            if page_token is None:
+                break;
+        update.message.reply_text(msg)
 
-        if(args[0] == "search"):
-            count = 0
-            filelist = {}
-            while True:
-                query = ' '.join(map(str,args[1:]))
-                response = service.files().list(q=query, 
-                                                spaces='drive', 
-                                                fields='nextPageToken, files(id, name)', 
-                                                pageToken=page_token).execute()
-                for file in response.get('files', []):
-                    # Process change
-                    file_info = {}
-                    name = file.get('name')
-                    id = file.get('id')
-                    file_info[name] = id
-                    filelist[count] = file_info
-                    update.message.reply_text("Found file: [" + str(count) + "], " + name)
-                    count += 1
-                page_token = response.get('nextPageToken', None)
-                if page_token is None:
-                    break;
+    elif(args[0] == "get"):
+        number = int(args[1])
+        name = filelist[number].keys()[0]
+        id = filelist[number][name]
+        filename = FILESTORAGE + name
+        request = service.files().get_media(fileId=id)
+        request_str = json.loads(request.to_json())
+        fh = io.FileIO(filename,"wb")
+        downloader = MediaIoBaseDownload(fh, request)
+        final = False
+        while final is False:
+            status, final = downloader.next_chunk()
+            print("Download %d ." % int(status.progress() * 100))
+        chat_id=update.message.chat_id
+        bot.send_document(chat_id=chat_id, document=open(filename.encode('utf-8'), 'rb'))
+        os.remove(filename.encode('utf-8'))
 
-        elif(args[0] == "get"):
-            print("check get")
-            number = int(args[1])
-            name = filelist[number].keys()[0]
-            print("name : "+ name)
-            id = filelist[number][name]
-            print("id : "+ id)
-            print(type(name))
-            filename = FILESTORAGE + name
-            print(filename)
-            print("id :" + id + ", filename : " + filename)
-            request = service.files().get_media(fileId=id)
-            fh = io.FileIO(filename,"wb")
-            downloader = MediaIoBaseDownload(fh, request)
-            done = False
-            while done is False:
-                status, done = downloader.next_chunk()
-
-            bot.send_document(chat_id=update.message.chat_id, document=open(filename, 'rb'))
-
-        else:
-            results = service.files().list(
-                pageSize=10,fields="nextPageToken, files(id, name)").execute()
-            items = results.get('files', [])
-            if not items:
-                print('No files found.')
-            else:
-                #update.message.reply_text('Files:')
-                msg = "Files: \n"
-                for item in items:
-                    msg += '{0}'.format(item['name']) + " \n"
-                update.message.reply_text(msg)
     else:
-        update.message.reply_text("Can't identify user.")
+        results = service.files().list(
+            pageSize=10,fields="nextPageToken, files(id, name)").execute()
+        items = results.get('files', [])
+        if not items:
+            print('No files found.')
+        else:
+            msg = "Files: \n"
+            for item in items:
+                msg += '{0}'.format(item['name']) + " \n"
+            update.message.reply_text(msg)
 
 def restart(bot, update):
     bot.send_message(update.message.chat_id, "Bot is restarting...")
@@ -222,12 +226,10 @@ def restart(bot, update):
         if(user["id"] == update.message.from_user.id):
             jsondata["users"][count] = chat_info
         count = count + 1
-
     print("json: " + str(jsondata))
-    #with open('users.json','w') as user_file:
-    user_file.write(json.dumps(jsondata))
-    user_file.close()
-
+    with open('users.json','w') as save_file:
+        save_file.write(json.dumps(jsondata))
+        save_file.close()
     time.sleep(0.2)
     os.execl(sys.executable, sys.executable, *sys.argv)
 
