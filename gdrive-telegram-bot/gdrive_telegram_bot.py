@@ -16,7 +16,9 @@ from apiclient import discovery
 from oauth2client import client
 from oauth2client import tools
 from oauth2client.file import Storage
-
+import psycopg2
+import pycurl
+from datetime import datetime
 try:
     import argparse
     flags = argparse.ArgumentParser(parents=[tools.argparser]).parse_args()
@@ -35,13 +37,24 @@ chat_info = None
 filelist = {}
 service = None
 FILESTORAGE = "files/"
+contents = None
 
 with open('users.json', 'rw') as user_file:
     jsondata = json.load(user_file)
 
+with open('psql.json', 'rw') as psql_file:
+    jsonpsql = json.load(psql_file)
+
+conn = psycopg2.connect("host=" + jsonpsql["host"] + " dbname=" + jsonpsql['dbname'] + " user=" + jsonpsql['user']+" password=" + jsonpsql['password'])
+cursor = conn.cursor()
+
 #google_keyboard = [['USE','ADD']]
 #markup = ReplyKeyboardMarkup(google_keyboard, one_time_keyboard=True)
 CHOOSING, ACCOUNTING, DONE = range(3)
+
+def http_body_callback(buf):
+    global contents;
+    contents = buf;
 
 def get_credential_info(service_name, user_name, user_id):
     home_dir = os.path.expanduser('~')
@@ -49,7 +62,9 @@ def get_credential_info(service_name, user_name, user_id):
     if not os.path.exists(credential_dir):
         os.makedirs(credential_dir)
     file_name = str(service_name)+"-"+str(user_name)+"-"+str(user_id)+".json"
+    print(file_name)
     credential_path = os.path.join(credential_dir, file_name)
+    print(credential_path)
     
     store = Storage(credential_path)
     credentials = store.get()
@@ -89,6 +104,35 @@ def start(bot, update):
 def hello(bot, update):
     update.message.reply_text(
         'Hello {}'.format(update.message.from_user.first_name))
+    return
+
+def eth_ticker(bot, update):
+    curl_handle = pycurl.Curl();
+    url="http://api.coinone.co.kr/ticker/?currency=ETH"
+    curl_handle.setopt(curl_handle.URL, url);
+    curl_handle.setopt(curl_handle.WRITEFUNCTION, http_body_callback);
+    curl_handle.perform()
+    res = json.loads(contents)
+    date = datetime.fromtimestamp(float(res["timestamp"]))
+    msg = "ethereum ticker\n"
+    msg += "time:   " + str(date) + "\n"
+    msg += "last:   <b>" + res["last"] + "</b>\n"
+    msg += "volume: " + res["volume"] + "\n"
+    msg += "first:  " + res["first"] + "\n"
+    msg += "high:   " + res["high"] + "\n"
+    msg += "low:    " + res["low"] + "\n"
+    update.message.reply_text(msg, parse_mode=telegram.ParseMode.HTML)
+    # data request from psql
+    #query = "select * from eth_ticker limit 1"
+    #cursor.execute(query)
+    #res = cursor.fetchone()
+    #msg = "ethereum ticker\n"
+    #msg += "volume: " + res[0] + "\n"
+    #msg += "first:  " + res[5] + "\n"
+    #msg += "last:   " + res[1] + "\n"
+    #msg += "high:   " + res[3] + "\n"
+    #msg += "low:    " + res[4] + "\n"
+    #msg += "time:   " + str(res[2]) + "\n"
     return
 
 def commander(bot, update, args):
@@ -166,13 +210,17 @@ def gdrive(bot, update, args):
     
     if(args[0] == "search"):
         count = 0
+        page_count = 0
         filelist = {}
-        msg = u"Searched Files\n"
+        print(args[1:])
+        query = ' '.join(map(unicode,args[1:]))
+        print(type(query))
         while True:
-            query = ' '.join(map(str,args[1:]))
-            response = service.files().list(q=query, 
+            page_msg = u"Searched Files\n"
+            response = service.files().list(q=query.encode('utf-8'), 
                                             spaces='drive', 
                                             fields='nextPageToken, files(id, name)', 
+                                            pageSize = 50,
                                             pageToken=page_token).execute()
             print(response)
             for file in response.get('files', []):
@@ -182,13 +230,12 @@ def gdrive(bot, update, args):
                 id = file.get('id')
                 file_info[name] = id
                 filelist[count] = file_info
-                msg += u"Found [{0}] : {1}".format(count, name) + " \n"
+                page_msg += u"Found [{0}] : {1}".format(count, name) + " \n"
                 count += 1
-                print(msg)
+            update.message.reply_text(page_msg)
             page_token = response.get('nextPageToken', None)
             if page_token is None:
                 break;
-        update.message.reply_text(msg)
 
     elif(args[0] == "get"):
         number = int(args[1])
@@ -262,6 +309,7 @@ if __name__ == '__main__':
     dispatcher.add_handler(CommandHandler('hello', hello))
     dispatcher.add_handler(CommandHandler('gdrive', gdrive, pass_args=True))
     dispatcher.add_handler(CommandHandler('cmd', commander, pass_args=True))
+    dispatcher.add_handler(CommandHandler('ticker', eth_ticker))
     dispatcher.add_handler(MessageHandler([Filters.text], on_chat_message))
     dispatcher.add_handler(CommandHandler('r', restart))
 
