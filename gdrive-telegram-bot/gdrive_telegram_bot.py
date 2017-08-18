@@ -1,10 +1,14 @@
+#!/usr/bin/python
+#-*- coding: utf-8 -*-
 from __future__ import print_function
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, ConversationHandler, RegexHandler
 from telegram import ReplyKeyboardMarkup
 import telegram 
+
 from subprocess import PIPE, STDOUT, Popen, check_output
 import shlex
-import json
+import logging
+
 from functools import wraps
 
 import httplib2
@@ -16,9 +20,16 @@ from apiclient import discovery
 from oauth2client import client
 from oauth2client import tools
 from oauth2client.file import Storage
+
 import psycopg2
+from psycopg2.extras import RealDictCursor
+import json
+
 import pycurl
 from datetime import datetime
+
+from psql_interface import *
+
 try:
     import argparse
     flags = argparse.ArgumentParser(parents=[tools.argparser]).parse_args()
@@ -30,6 +41,8 @@ except ImportError:
 SCOPES = 'https://www.googleapis.com/auth/drive'
 CLIENT_SECRET_FILE = 'client_secret.json'
 APPLICATION_NAME = 'Drive API Python Quickstart'
+TELEGRAM_MY_ID = 53971422
+
 proc = None
 valid = False
 credentials = None
@@ -39,18 +52,20 @@ service = None
 FILESTORAGE = "files/"
 contents = None
 
-with open('users.json', 'rw') as user_file:
-    jsondata = json.load(user_file)
-
 with open('psql.json', 'rw') as psql_file:
     jsonpsql = json.load(psql_file)
 
 conn = psycopg2.connect("host=" + jsonpsql["host"] + " dbname=" + jsonpsql['dbname'] + " user=" + jsonpsql['user']+" password=" + jsonpsql['password'])
-cursor = conn.cursor()
+cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+logging.basicConfig(filename='bot.log', level=logging.DEBUG)
 
 #google_keyboard = [['USE','ADD']]
 #markup = ReplyKeyboardMarkup(google_keyboard, one_time_keyboard=True)
 CHOOSING, ACCOUNTING, DONE = range(3)
+
+telegram_info = get_telegram_info(cursor, TELEGRAM_MY_ID)
+google_info = get_google_info(cursor, TELEGRAM_MY_ID)
 
 def http_body_callback(buf):
     global contents;
@@ -82,19 +97,16 @@ def restricted(func):
     @wraps(func)
     def wrapped(bot, update, *args, **kwargs):
         if not valid:
-            print("Unauthorized access denied for {}.".format(user_id))
+            print("Unauthorized access denied for {}.".format(TELEGRAM_MY_ID))
             return
         return func(bot, update, *args, **kwargs)
     return wrapped
 
 def start(bot, update):
     global valid
-    global chat_info
-    for user in jsondata["users"]:
-        if(user["id"] == update.message.from_user.id):
-            if(user["permission"] == "valid"):
-                valid = True
-                chat_info = user
+    chat_info = get_user_info(cursor, update.message.from_user.id)
+    if(chat_info is not None and chat_info['permission'] == 'valid'):
+        valid = True
     if(valid):
         update.message.reply_text('Hello World!')
     else:
@@ -104,35 +116,6 @@ def start(bot, update):
 def hello(bot, update):
     update.message.reply_text(
         'Hello {}'.format(update.message.from_user.first_name))
-    return
-
-def eth_ticker(bot, update):
-    curl_handle = pycurl.Curl();
-    url="http://api.coinone.co.kr/ticker/?currency=ETH"
-    curl_handle.setopt(curl_handle.URL, url);
-    curl_handle.setopt(curl_handle.WRITEFUNCTION, http_body_callback);
-    curl_handle.perform()
-    res = json.loads(contents)
-    date = datetime.fromtimestamp(float(res["timestamp"]))
-    msg = "ethereum ticker\n"
-    msg += "time:   " + str(date) + "\n"
-    msg += "last:   <b>" + res["last"] + "</b>\n"
-    msg += "volume: " + res["volume"] + "\n"
-    msg += "first:  " + res["first"] + "\n"
-    msg += "high:   " + res["high"] + "\n"
-    msg += "low:    " + res["low"] + "\n"
-    update.message.reply_text(msg, parse_mode=telegram.ParseMode.HTML)
-    # data request from psql
-    #query = "select * from eth_ticker limit 1"
-    #cursor.execute(query)
-    #res = cursor.fetchone()
-    #msg = "ethereum ticker\n"
-    #msg += "volume: " + res[0] + "\n"
-    #msg += "first:  " + res[5] + "\n"
-    #msg += "last:   " + res[1] + "\n"
-    #msg += "high:   " + res[3] + "\n"
-    #msg += "low:    " + res[4] + "\n"
-    #msg += "time:   " + str(res[2]) + "\n"
     return
 
 def commander(bot, update, args):
@@ -155,37 +138,66 @@ def on_chat_message(bot, update):
     bot.sendMessage(chat_id, text=("%s say " + update.message.text) % user_name)
 
 def google(bot, update):
-    global credentials, chat_info
-
-    if("google" in chat_info):
-        update.message.reply_text("check your account : " + chat_info["google"])
+    global google_info
+    # 사용자 정보가 있는지 확인.
+    logging.debug(str(google_info))
+    if(google_info is not None and google_info['service_id']):
+        update.message.reply_text("Check your account : " + google_info['service_id'])
         return CHOOSING
     else:
         update.message.reply_text("Add your account")
         return ACCOUNTING
 
 def add_account(bot, update):
+    # 이전 사용자 정보가 있는 경우 
+    # 이전 사용자 정보가 없는 경우
     update.message.reply_text("Add your account")
     return ACCOUNTING
 
 def use_account(bot, update):
-    global chat_info
-    text = chat_info["google"]
+    global google_info
+    # 현재 사용자 그대로 사용
+    text = google_info['service_id']
     update.message.reply_text('Your account name: %s' % text.lower())
     return DONE
 
 def input_account(bot, update, user_data):
-    global chat_info
+    global google_info
+    # 새로운 사용자 정보 받기
     text = update.message.text
-    chat_info["google"] = text
-    update.message.reply_text('Your account name: %s' % text.lower())
+    if (google_info is None): google_info = {}
+    google_info['service_id'] = text
+    update.message.reply_text('Input account name: %s' % text.lower())
     return DONE
 
 def done(bot, update, user_data):
-    global chat_info
+    global google_info
+    # 이전 사용자가 있으면 selected를 false로 바꾸어야 한다.
+    # 이전 사용자가 없으면 selected를 선택할 필요가 없다.
+    # 사용할 사용자에 대한 selected만 있으면 된다.
+    # 사용자 정보가 없으면 추가한다.
+    found = False
+    query = "update services set selected='false' where service_name='google' and id=" + str(update.message.from_user.id)
+    cursor.execute(query)
+    conn.commit()
+    query = "select * from services where service_name='google' and id=" + str(update.message.from_user.id)
+    cursor.execute(query)
+    conn.commit()
+    res = cursor.fetchall()
+    logging.debug("res: " + str(res))
+    logging.debug("google: " + str(google_info))
+    for item in res:
+        if(item['service_id'] == google_info['service_id']):
+            found = True
+    if(found == True):
+        query = "update services set selected=True where id=" + str(TELEGRAM_MY_ID) + " and service_id='" + google_info['service_id'] + "'" 
+    else:
+        query = "insert into services(id, service_name, service_id, selected) values (" + str(TELEGRAM_MY_ID) + ", 'google', '" + google_info['service_id'] + "', 'True')"
+    cursor.execute(query)
+    conn.commit()
     update.message.reply_text("Your Account Name : "
                               "%s "
-                              "Until next time!" % chat_info["google"])
+                              "Until next time!" % google_info['service_id'])
     return ConversationHandler.END
 
 @restricted
@@ -195,26 +207,23 @@ def gdrive(bot, update, args):
     Creates a Google Drive API service object and outputs the names and IDs
     for up to 10 files.
     """
-    global valid, chat_info, filelist, service
+    global chat_info, filelist, service, google_info
     page_token = None
-
-    if("google" not in chat_info):
+    if(google_info is None):
         bot.sendMessage(update.message.chat_id, text=(
-            "What is your google account?"
+            "What is your google account?\n"
             "Start /google command."))
         return
-
-    credentials = get_credential_info("gdrive", chat_info["google"], update.message.from_user.id)
+    credentials = get_credential_info("gdrive", google_info["service_id"], update.message.from_user.id)
     http = credentials.authorize(httplib2.Http())
-    service = discovery.build('drive', 'v3', http=http)
-    
-    if(args[0] == "search"):
+    service = discovery.build('drive', 'v3', http=http, cache_discovery=False)
+    if(len(args) > 0 and args[0] == "search"):
         count = 0
         page_count = 0
         filelist = {}
         print(args[1:])
         query = ' '.join(map(unicode,args[1:]))
-        print(type(query))
+        print(query)
         while True:
             page_msg = u"Searched Files\n"
             response = service.files().list(q=query.encode('utf-8'), 
@@ -236,8 +245,7 @@ def gdrive(bot, update, args):
             page_token = response.get('nextPageToken', None)
             if page_token is None:
                 break;
-
-    elif(args[0] == "get"):
+    elif(len(args) > 0 and args[0] == "get"):
         number = int(args[1])
         name = filelist[number].keys()[0]
         id = filelist[number][name]
@@ -253,37 +261,29 @@ def gdrive(bot, update, args):
         chat_id=update.message.chat_id
         bot.send_document(chat_id=chat_id, document=open(filename.encode('utf-8'), 'rb'))
         os.remove(filename.encode('utf-8'))
-
     else:
+        print("check else")
         results = service.files().list(
             pageSize=10,fields="nextPageToken, files(id, name)").execute()
         items = results.get('files', [])
         if not items:
             print('No files found.')
         else:
-            msg = "Files: \n"
+            msg = u"Files: \n"
             for item in items:
-                msg += '{0}'.format(item['name']) + " \n"
+                msg += u'{0}'.format(item['name']) + " \n"
             update.message.reply_text(msg)
 
+@restricted
 def restart(bot, update):
     bot.send_message(update.message.chat_id, "Bot is restarting...")
     count = 0
-    for user in jsondata["users"]:
-        if(user["id"] == update.message.from_user.id):
-            jsondata["users"][count] = chat_info
-        count = count + 1
-    print("json: " + str(jsondata))
-    with open('users.json','w') as save_file:
-        save_file.write(json.dumps(jsondata))
-        save_file.close()
     time.sleep(0.2)
     os.execl(sys.executable, sys.executable, *sys.argv)
 
 if __name__ == '__main__':
-    updater = Updater('420091787:AAFuiSJXkYK1pk1yhU3WRjoEOmw7vR8dh0Q')
+    updater = Updater(telegram_info['service_accesstoken'])
     dispatcher = updater.dispatcher
-
     google_handler = ConversationHandler(
         entry_points=[CommandHandler('google', google)],
         states={
@@ -303,15 +303,12 @@ if __name__ == '__main__':
         },
         fallbacks=[RegexHandler('^Done$', done, pass_user_data=True)]
     )
-
     dispatcher.add_handler(google_handler)
     dispatcher.add_handler(CommandHandler('start', start))
     dispatcher.add_handler(CommandHandler('hello', hello))
     dispatcher.add_handler(CommandHandler('gdrive', gdrive, pass_args=True))
     dispatcher.add_handler(CommandHandler('cmd', commander, pass_args=True))
-    dispatcher.add_handler(CommandHandler('ticker', eth_ticker))
     dispatcher.add_handler(MessageHandler([Filters.text], on_chat_message))
     dispatcher.add_handler(CommandHandler('r', restart))
-
     updater.start_polling()
     updater.idle()
